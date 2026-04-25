@@ -1,0 +1,33 @@
+# Virtual environments
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Model artifacts
+Models/*.pkl
+Models/*.joblib
+
+# Data outputs
+*.csv
+*.parquet
+*.feather
+*.zip
+
+# IDE / OS
+.env
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# temp/backup files
+*.temp
+*.original
+*.update
+archive/
+Dashboard/archive/
