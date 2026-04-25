@@ -97,7 +97,6 @@ The app translates signals into **portfolio bias guidance**:
 - Value / quality tilt
 - Defensive positioning
 
-⚠️ *For research purposes only — not financial advice.*
 
 ---
 
@@ -111,5 +110,3 @@ The app translates signals into **portfolio bias guidance**:
 - 📱 Web-accessible dashboard
 
 ---
-
-# 🧱 Project Structure
