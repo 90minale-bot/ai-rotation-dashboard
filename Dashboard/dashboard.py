@@ -276,8 +276,8 @@ symbol = st.sidebar.text_input("Market Proxy / Ticker", value=default_symbol).up
 
 period = st.sidebar.selectbox(
     "Price History Period",
-    ["6mo", "1y", "2y", "5y"],
-    index=1,
+    ["3mo", "6mo", "1y", "2y", "5y"],
+    index=2,
 )
 
 st.sidebar.markdown("---")
@@ -285,8 +285,8 @@ st.sidebar.subheader("Rotation Tracker")
 
 rotation_period = st.sidebar.selectbox(
     "Rotation History Period",
-    ["6mo", "1y", "2y", "5y"],
-    index=2,
+    ["3mo", "6mo", "1y", "2y", "5y"],
+    index=3,
 )
 
 trend_lookback = st.sidebar.selectbox(
