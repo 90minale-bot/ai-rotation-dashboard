@@ -60,8 +60,17 @@ if errorlevel 1 (
 )
 
 echo.
+echo Ensuring yfinance is installed (required for earnings data)...
+pip install yfinance
+if errorlevel 1 (
+  echo ERROR: Failed to install yfinance.
+  pause
+  exit /b 1
+)
+
+echo.
 echo Verifying key packages...
-python -c "import numpy, pandas, sklearn; import streamlit; print('OK: numpy/pandas/sklearn/streamlit installed')"
+python -c "import numpy, pandas, sklearn; import streamlit; import yfinance; print('OK: numpy/pandas/sklearn/streamlit/yfinance installed')"
 if errorlevel 1 (
   echo ERROR: Verification failed.
   pause
@@ -76,7 +85,7 @@ echo   1) (venv is active in THIS window)
 echo   2) Run training:
 echo        python main.py --symbol RTX
 echo   3) Run dashboard:
-echo        streamlit run Dashboard\dashboard.py -- --symbol RTX
+echo        streamlit run roi_dashboard.py
 echo.
 pause
 endlocal
