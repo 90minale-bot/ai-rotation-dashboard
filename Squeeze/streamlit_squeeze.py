@@ -3,111 +3,156 @@ import glob
 import pandas as pd
 import streamlit as st
 
+from squeeze import (
+    DEFAULT_WATCHLIST,
+    get_all_us_tickers,
+    run_screen,
+)
+
 
 DEFAULT_RESULTS_FILE = "squeeze_results.csv"
 SKIPPED_FILE = "squeeze_skipped.csv"
 
 
 st.set_page_config(
-    page_title="Short Squeeze Dashboard",
+    page_title="Live Short Squeeze Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
 
-st.title("📈 Short Squeeze Dashboard")
+st.title("📈 Live Short Squeeze Dashboard")
 
 st.markdown("""
-Choose the CSV file to load, then use the filters on the left.  
-This version includes both your original **squeeze score** and the new **pro squeeze score**.
+Run the short squeeze scanner directly from this web app.
+
+No `.bat` file required.
 """)
 
 
-def load_csv(path):
-    return pd.read_csv(path)
+def safe_read_csv(path):
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+    return pd.DataFrame()
+
+
+def clean_numeric_columns(df):
+    numeric_cols = [
+        "last_price",
+        "short_float_pct",
+        "days_to_cover",
+        "shares_short",
+        "float_shares",
+        "market_cap",
+        "last_volume",
+        "avg_volume_5",
+        "avg_volume_20",
+        "volume_ratio",
+        "volume_ratio_5",
+        "volume_ratio_20",
+        "volume_zscore_20",
+        "float_turnover_pct",
+        "ret_5d_pct",
+        "ret_20d_pct",
+        "pct_from_20d_high",
+        "pct_from_20d_low",
+        "squeeze_score",
+        "pro_squeeze_score",
+    ]
+
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].astype(str).str.upper().str.strip()
+
+    return df
 
 
 # -----------------------------
-# CSV selector
+# Sidebar scanner controls
 # -----------------------------
-st.sidebar.header("Data Source")
+st.sidebar.header("Live Scanner")
 
-csv_files = sorted(glob.glob("*.csv"))
-
-if not csv_files:
-    st.error("No CSV files found in this folder.")
-    st.info("Run your `.bat` file and choose option 1 or 2 to generate results.")
-    st.stop()
-
-if "selected_csv" not in st.session_state:
-    st.session_state.selected_csv = (
-        DEFAULT_RESULTS_FILE if DEFAULT_RESULTS_FILE in csv_files else csv_files[0]
-    )
-
-if st.session_state.selected_csv not in csv_files:
-    st.session_state.selected_csv = csv_files[0]
-
-selected_file = st.sidebar.selectbox(
-    "Select CSV file to load",
-    csv_files,
-    index=csv_files.index(st.session_state.selected_csv),
-    key="selected_csv_selectbox"
+scan_mode = st.sidebar.radio(
+    "Scan Mode",
+    [
+        "Default Watchlist",
+        "Custom Tickers",
+        "All US Stocks - limited",
+    ]
 )
 
-st.session_state.selected_csv = selected_file
+custom_tickers_text = ""
 
-if st.button("🔄 Refresh Data"):
-    st.rerun()
+if scan_mode == "Custom Tickers":
+    custom_tickers_text = st.sidebar.text_area(
+        "Enter tickers separated by commas",
+        value="HTZ, SOUN, BYND, GME, AMC, MARA"
+    )
 
-selected_file = st.session_state.selected_csv
+max_symbols = st.sidebar.number_input(
+    "Max symbols to scan",
+    min_value=1,
+    max_value=500,
+    value=50,
+    step=10
+)
 
-if not os.path.exists(selected_file):
-    st.error(f"Could not find `{selected_file}`.")
-    st.stop()
+st.sidebar.caption("For Streamlit Cloud, keep this under 100 for faster loading.")
 
-file_modified = pd.Timestamp(os.path.getmtime(selected_file), unit="s")
-
-st.info(f"📂 Loaded CSV: `{selected_file}`")
-st.info(f"🕒 Last modified: `{file_modified}`")
+run_live_scan = st.sidebar.button("🚀 Run Live Scan")
 
 
-df = load_csv(selected_file)
+# -----------------------------
+# Run scanner
+# -----------------------------
+if run_live_scan:
+    if scan_mode == "Default Watchlist":
+        symbols = DEFAULT_WATCHLIST
+
+    elif scan_mode == "Custom Tickers":
+        symbols = [
+            t.strip().upper()
+            for t in custom_tickers_text.replace("\n", ",").split(",")
+            if t.strip()
+        ]
+
+    else:
+        with st.spinner("Loading US ticker universe..."):
+            symbols = get_all_us_tickers()
+
+    symbols = symbols[:max_symbols]
+
+    st.info(f"Running live scan on {len(symbols)} symbols...")
+
+    with st.spinner("Scanning stocks. This may take a minute..."):
+        df = run_screen(symbols, max_symbols=None)
+
+    if df is None or df.empty:
+        st.warning("Live scan completed, but no results were returned.")
+        df = pd.DataFrame()
+    else:
+        df = clean_numeric_columns(df)
+        st.success("Live scan complete.")
+
+else:
+    df = safe_read_csv(DEFAULT_RESULTS_FILE)
+
+    if not df.empty:
+        df = clean_numeric_columns(df)
+        st.info(f"Loaded existing `{DEFAULT_RESULTS_FILE}`. Use **Run Live Scan** to refresh.")
+    else:
+        st.warning("No existing results found. Use **Run Live Scan** in the sidebar.")
+
 
 if df.empty:
-    st.warning("The selected CSV exists, but it is empty.")
     st.stop()
-
-
-if "symbol" in df.columns:
-    df["symbol"] = df["symbol"].astype(str).str.upper().str.strip()
-
-
-numeric_cols = [
-    "last_price",
-    "short_float_pct",
-    "days_to_cover",
-    "shares_short",
-    "float_shares",
-    "market_cap",
-    "last_volume",
-    "avg_volume_5",
-    "avg_volume_20",
-    "volume_ratio",
-    "volume_ratio_5",
-    "volume_ratio_20",
-    "volume_zscore_20",
-    "float_turnover_pct",
-    "ret_5d_pct",
-    "ret_20d_pct",
-    "pct_from_20d_high",
-    "pct_from_20d_low",
-    "squeeze_score",
-    "pro_squeeze_score",
-]
-
-for col in numeric_cols:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
 
 
 # -----------------------------
@@ -220,7 +265,7 @@ st.divider()
 col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
-    st.metric("Rows in CSV", len(df))
+    st.metric("Rows Scanned", len(df))
 
 with col2:
     st.metric("Rows After Filters", len(filtered))
@@ -245,66 +290,60 @@ with col5:
 
 
 # -----------------------------
-# Filtered top 10
+# Top tables
 # -----------------------------
-st.subheader("🏆 Filtered Top 10 by Original Squeeze Score")
+st.subheader("🏆 Top 10 by Original Squeeze Score")
 
 if filtered.empty:
     st.warning("No rows match the current filters.")
 else:
-    if "squeeze_score" in filtered.columns:
-        top_cols = [
-            "symbol",
-            "squeeze_score",
-            "squeeze_rating",
-            "pro_squeeze_score",
-            "pro_squeeze_rating",
-            "signal",
-            "last_price",
-            "short_float_pct",
-            "days_to_cover",
-            "volume_ratio",
-        ]
+    top_cols = [
+        "symbol",
+        "squeeze_score",
+        "squeeze_rating",
+        "pro_squeeze_score",
+        "pro_squeeze_rating",
+        "signal",
+        "last_price",
+        "short_float_pct",
+        "days_to_cover",
+        "volume_ratio",
+    ]
 
-        top_existing_cols = [c for c in top_cols if c in filtered.columns]
+    top_existing_cols = [c for c in top_cols if c in filtered.columns]
 
-        st.dataframe(
-            filtered.sort_values("squeeze_score", ascending=False)[top_existing_cols].head(10),
-            use_container_width=True
-        )
+    st.dataframe(
+        filtered.sort_values("squeeze_score", ascending=False)[top_existing_cols].head(10),
+        use_container_width=True
+    )
 
 
-st.subheader("🎯 Filtered Top 10 by Pro Squeeze Score")
+st.subheader("🎯 Top 10 by Pro Squeeze Score")
 
-if filtered.empty:
-    st.warning("No rows match the current filters.")
-else:
-    if "pro_squeeze_score" in filtered.columns:
-        pro_top_cols = [
-            "symbol",
-            "pro_squeeze_score",
-            "pro_squeeze_rating",
-            "squeeze_score",
-            "squeeze_rating",
-            "signal",
-            "last_price",
-            "short_float_pct",
-            "days_to_cover",
-            "volume_ratio",
-            "volume_zscore_20",
-            "float_turnover_pct",
-            "ret_5d_pct",
-            "ret_20d_pct",
-        ]
+if not filtered.empty and "pro_squeeze_score" in filtered.columns:
+    pro_top_cols = [
+        "symbol",
+        "pro_squeeze_score",
+        "pro_squeeze_rating",
+        "squeeze_score",
+        "squeeze_rating",
+        "signal",
+        "last_price",
+        "short_float_pct",
+        "days_to_cover",
+        "volume_ratio",
+        "volume_zscore_20",
+        "float_turnover_pct",
+        "ret_5d_pct",
+        "ret_20d_pct",
+    ]
 
-        pro_top_existing_cols = [c for c in pro_top_cols if c in filtered.columns]
+    pro_top_existing_cols = [c for c in pro_top_cols if c in filtered.columns]
 
-        st.dataframe(
-            filtered.sort_values("pro_squeeze_score", ascending=False)[pro_top_existing_cols].head(10),
-            use_container_width=True
-        )
-    else:
-        st.warning("This CSV does not have a `pro_squeeze_score` column. Re-run `squeeze.py` first.")
+    st.dataframe(
+        filtered.sort_values("pro_squeeze_score", ascending=False)[pro_top_existing_cols].head(10),
+        use_container_width=True
+    )
 
 
 # -----------------------------
@@ -312,48 +351,25 @@ else:
 # -----------------------------
 st.divider()
 
-st.subheader("🔍 Ticker Debug")
+st.subheader("🔍 Ticker Lookup")
 
 ticker_lookup = st.text_input("Enter ticker to inspect", value="HTZ")
 
 if ticker_lookup:
     ticker_lookup = ticker_lookup.upper().strip()
 
-    if "symbol" not in df.columns:
-        st.error("No `symbol` column found in CSV.")
-    else:
+    if "symbol" in df.columns:
         ticker_df = df[df["symbol"] == ticker_lookup]
 
-        st.write(f"{ticker_lookup} in loaded CSV?", ticker_lookup in df["symbol"].values)
-
         if ticker_df.empty:
-            st.warning(f"{ticker_lookup} was NOT found in `{selected_file}`.")
-
-            if os.path.exists(SKIPPED_FILE) and os.path.getsize(SKIPPED_FILE) > 0:
-                try:
-                    skipped_df = pd.read_csv(SKIPPED_FILE)
-
-                    if "symbol" in skipped_df.columns:
-                        skipped_df["symbol"] = skipped_df["symbol"].astype(str).str.upper().str.strip()
-
-                        skipped_match = skipped_df[skipped_df["symbol"] == ticker_lookup]
-
-                        if not skipped_match.empty:
-                            st.error(f"{ticker_lookup} was skipped during the scan.")
-                            st.dataframe(skipped_match, use_container_width=True)
-                        else:
-                            st.info(f"{ticker_lookup} was not found in skipped file either.")
-                except pd.errors.EmptyDataError:
-                    st.info("Skipped ticker file is empty.")
-                except Exception as e:
-                    st.warning(f"Could not read skipped ticker file: {e}")
+            st.warning(f"{ticker_lookup} was not found in the current scan.")
         else:
-            st.success(f"{ticker_lookup} found in loaded CSV.")
+            st.success(f"{ticker_lookup} found.")
             st.dataframe(ticker_df, use_container_width=True)
 
 
 # -----------------------------
-# Full filtered table
+# Full table
 # -----------------------------
 st.divider()
 
@@ -391,22 +407,27 @@ display_cols = [
 
 existing_cols = [c for c in display_cols if c in filtered.columns]
 
-table_df = filtered.copy()
-
-sort_choice = st.selectbox(
-    "Sort table by",
-    [
+sort_options = [
+    c for c in [
         "pro_squeeze_score",
         "squeeze_score",
         "volume_ratio",
         "short_float_pct",
         "days_to_cover",
         "ret_5d_pct",
-    ],
-    index=0
+    ]
+    if c in filtered.columns
+]
+
+sort_choice = st.selectbox(
+    "Sort table by",
+    sort_options,
+    index=0 if sort_options else None
 )
 
-if sort_choice in table_df.columns:
+table_df = filtered.copy()
+
+if sort_choice:
     table_df = table_df.sort_values(sort_choice, ascending=False)
 
 st.dataframe(
@@ -422,21 +443,12 @@ st.dataframe(
 st.divider()
 
 with st.expander("⚠️ Skipped Tickers"):
-    if os.path.exists(SKIPPED_FILE) and os.path.getsize(SKIPPED_FILE) > 0:
-        try:
-            skipped_df = pd.read_csv(SKIPPED_FILE)
+    skipped_df = safe_read_csv(SKIPPED_FILE)
 
-            if skipped_df.empty:
-                st.success("No skipped tickers.")
-            else:
-                st.dataframe(skipped_df, use_container_width=True)
-
-        except pd.errors.EmptyDataError:
-            st.success("No skipped tickers.")
-        except Exception as e:
-            st.warning(f"Could not read skipped ticker file: {e}")
-    else:
+    if skipped_df.empty:
         st.success("No skipped tickers.")
+    else:
+        st.dataframe(skipped_df, use_container_width=True)
 
 
 with st.expander("How to read this dashboard"):
@@ -456,14 +468,10 @@ A stricter confirmation score. It rewards:
 - positive price confirmation
 - proximity to 20-day highs
 
-### How to Use
+### Cloud Usage
 
-High **squeeze_score** but low **pro_squeeze_score**  
-= interesting but less confirmed.
-
-High **squeeze_score** and high **pro_squeeze_score**  
-= stronger setup.
-
-High **pro_squeeze_score**  
-= more selective setup with better confirmation.
+For Streamlit Cloud:
+- Use **Default Watchlist** or **Custom Tickers**
+- Keep max symbols around 25–100
+- Avoid large all-stock scans unless you are okay waiting
 """)
