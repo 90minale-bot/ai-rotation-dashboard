@@ -189,6 +189,88 @@ def _latest_scored_row(features: pd.DataFrame) -> pd.Series | None:
     return scored_rows.iloc[-1]
 
 
+def score_rotation_row(row: pd.Series) -> dict:
+    score = 0
+    details = {}
+
+    def check(condition, label):
+        nonlocal score
+        passed = bool(condition) if pd.notna(condition) else False
+        details[label] = passed
+        if passed:
+            score += 1
+
+    check(
+        row.get("value_vs_ai_ret_20", np.nan) > 0
+        and row.get("value_vs_ai_trend_up", False),
+        "Value outperforming AI",
+    )
+
+    check(
+        row.get("industrials_vs_ai_ret_20", np.nan) > 0
+        and row.get("industrials_vs_ai_trend_up", False),
+        "Industrials outperforming AI",
+    )
+
+    check(
+        row.get("energy_vs_ai_ret_20", np.nan) > 0
+        and row.get("energy_vs_ai_trend_up", False),
+        "Energy outperforming AI",
+    )
+
+    check(
+        row.get("international_value_vs_ai_ret_20", np.nan) > 0
+        and row.get("international_value_vs_ai_trend_up", False),
+        "International value outperforming AI",
+    )
+
+    check(
+        row.get("quality_vs_speculation_ret_20", np.nan) > 0
+        and row.get("quality_vs_speculation_trend_up", False),
+        "Quality outperforming speculation",
+    )
+
+    check(
+        row.get("market_breadth_ret_20", np.nan) > 0
+        and row.get("market_breadth_trend_up", False),
+        "Market breadth improving",
+    )
+
+    check(
+        row.get("TLT_ret_20", np.nan) > 0
+        and row.get("TLT_trend_up", False),
+        "Long bonds rising",
+    )
+
+    check(
+        row.get("credit_risk_appetite_ret_20", np.nan) < 0,
+        "Credit risk appetite weakening",
+    )
+
+    check(
+        row.get("VIX_ret_20", np.nan) > 0,
+        "Volatility rising",
+    )
+
+    if not details:
+        signal = "NO DATA"
+    elif score >= 7:
+        signal = "STRONG VALUE / DEFENSIVE ROTATION"
+    elif score >= 5:
+        signal = "CONFIRMED ROTATION"
+    elif score >= 3:
+        signal = "EARLY ROTATION"
+    else:
+        signal = "AI / GROWTH DOMINANCE"
+
+    return {
+        "rotation_score": score if details else np.nan,
+        "max_score": 9,
+        "signal": signal,
+        "details": details,
+    }
+
+
 def score_latest_rotation(features: pd.DataFrame) -> dict:
     if features is None or features.empty:
         return {
@@ -207,82 +289,14 @@ def score_latest_rotation(features: pd.DataFrame) -> dict:
             "details": {},
         }
 
-    score = 0
-    details = {}
-
-    def check(condition, label):
-        nonlocal score
-        passed = bool(condition) if pd.notna(condition) else False
-        details[label] = passed
-        if passed:
-            score += 1
-
-    check(
-        latest.get("value_vs_ai_ret_20", np.nan) > 0
-        and latest.get("value_vs_ai_trend_up", False),
-        "Value outperforming AI",
-    )
-
-    check(
-        latest.get("industrials_vs_ai_ret_20", np.nan) > 0
-        and latest.get("industrials_vs_ai_trend_up", False),
-        "Industrials outperforming AI",
-    )
-
-    check(
-        latest.get("energy_vs_ai_ret_20", np.nan) > 0
-        and latest.get("energy_vs_ai_trend_up", False),
-        "Energy outperforming AI",
-    )
-
-    check(
-        latest.get("international_value_vs_ai_ret_20", np.nan) > 0
-        and latest.get("international_value_vs_ai_trend_up", False),
-        "International value outperforming AI",
-    )
-
-    check(
-        latest.get("quality_vs_speculation_ret_20", np.nan) > 0
-        and latest.get("quality_vs_speculation_trend_up", False),
-        "Quality outperforming speculation",
-    )
-
-    check(
-        latest.get("market_breadth_ret_20", np.nan) > 0
-        and latest.get("market_breadth_trend_up", False),
-        "Market breadth improving",
-    )
-
-    check(
-        latest.get("TLT_ret_20", np.nan) > 0
-        and latest.get("TLT_trend_up", False),
-        "Long bonds rising",
-    )
-
-    check(
-        latest.get("credit_risk_appetite_ret_20", np.nan) < 0,
-        "Credit risk appetite weakening",
-    )
-
-    check(
-        latest.get("VIX_ret_20", np.nan) > 0,
-        "Volatility rising",
-    )
-
-    if score >= 7:
-        signal = "STRONG VALUE / DEFENSIVE ROTATION"
-    elif score >= 5:
-        signal = "CONFIRMED ROTATION"
-    elif score >= 3:
-        signal = "EARLY ROTATION"
-    else:
-        signal = "AI / GROWTH DOMINANCE"
+    score_data = score_rotation_row(latest)
+    score = score_data.get("rotation_score", np.nan)
 
     return {
         "rotation_score": score,
         "max_score": 9,
-        "signal": signal,
-        "details": details,
+        "signal": score_data.get("signal", "NO DATA"),
+        "details": score_data.get("details", {}),
         "as_of": latest.name,
     }
 

@@ -18,15 +18,29 @@ sys.path.append(str(PROJECT_ROOT))
 
 try:
     from value_ai_rotation.rotation_v2 import (
+        download_rotation_prices,
         get_rotation_dashboard_data,
         get_rotation_trend,
     )
 except Exception as e:
+    download_rotation_prices = None
     get_rotation_dashboard_data = None
     get_rotation_trend = None
     ROTATION_IMPORT_ERROR = e
 else:
     ROTATION_IMPORT_ERROR = None
+
+try:
+    from value_ai_rotation.rotation_60_predictive import (
+        build_60d_model_dataset,
+        predict_latest_60d,
+    )
+except Exception as e:
+    build_60d_model_dataset = None
+    predict_latest_60d = None
+    ROTATION_60D_IMPORT_ERROR = e
+else:
+    ROTATION_60D_IMPORT_ERROR = None
 
 
 st.set_page_config(
@@ -124,6 +138,13 @@ def download_stock_data(symbol: str, period: str = "1y") -> pd.DataFrame:
     return df.sort_values("date")
 
 
+@st.cache_data(ttl=3600)
+def get_60d_prediction_data() -> dict:
+    prices = download_rotation_prices(period="5y")
+    dataset = build_60d_model_dataset(prices)
+    return predict_latest_60d(dataset)
+
+
 def plot_price_chart(df: pd.DataFrame, symbol: str):
     df = df.copy()
     price_col = "adjclose" if "adjclose" in df.columns else "close"
@@ -182,14 +203,67 @@ def classify_price_trend(df: pd.DataFrame):
 
 def get_signal_meaning(signal: str) -> str:
     if signal == "AI / GROWTH DOMINANCE":
-        return "AI/growth is still leading. Rotation into value has not confirmed yet."
+        return "20D tactical read: AI/growth is still leading. Rotation into value has not confirmed yet."
     if signal == "EARLY ROTATION":
-        return "Some rotation signals are starting to appear, but confirmation is still early."
+        return "20D tactical read: some rotation signals are starting to appear, but confirmation is still early."
     if signal == "CONFIRMED ROTATION":
-        return "Multiple signals suggest money is rotating away from AI/growth toward value, quality, or defensive areas."
+        return "20D tactical read: multiple signals suggest money is rotating away from AI/growth toward value, quality, or defensive areas."
     if signal == "STRONG VALUE / DEFENSIVE ROTATION":
-        return "Rotation is broad and strong. Value, defensives, and risk-off signals are leading."
+        return "20D tactical read: rotation is broad and strong. Value, defensives, and risk-off signals are leading."
     return "Not enough data to classify the regime."
+
+
+def get_60d_signal_meaning(signal: str) -> dict:
+    if signal == "ROTATION EXTENDED / AI REASSERTION RISK":
+        return {
+            "meaning": "60D strategic read: the value rotation may already be mature. Historically, elevated rotation scores have often been followed by AI/growth reasserting over the next 60 trading days.",
+            "use": "Use this as a trim, hedge, or avoid-chasing warning for value/defensive exposure. Watch AI internals for re-entry confirmation.",
+        }
+
+    if signal == "60D AI / GROWTH REASSERTION":
+        return {
+            "meaning": "60D strategic read: the setup favors AI/growth over value for the next 60 trading days.",
+            "use": "Use this as support for rebuilding AI/growth exposure or reducing extended value tilts.",
+        }
+
+    if signal == "60D VALUE ROTATION PERSISTENCE":
+        return {
+            "meaning": "60D strategic read: the rotation setup has enough historical support to suggest value may keep outperforming AI/growth.",
+            "use": "Use this as support for holding value, quality, or defensive tilts longer, while still monitoring risk appetite.",
+        }
+
+    return {
+        "meaning": "60D strategic read: no strong historical edge is present for either value persistence or AI/growth reassertion.",
+        "use": "Use the 20D tactical signal for shorter-term positioning, but avoid making a large 60D bet from this read alone.",
+    }
+
+
+def get_two_clock_meaning(signal: str, signal_60d: str) -> str:
+    if (
+        signal in {"CONFIRMED ROTATION", "STRONG VALUE / DEFENSIVE ROTATION"}
+        and signal_60d == "ROTATION EXTENDED / AI REASSERTION RISK"
+    ):
+        return (
+            "Combined read: value may still be working tactically, but the 60D layer warns "
+            "that the move is mature. This is a harvest/trim/watch-AI-reentry setup, not a chase-value setup."
+        )
+
+    if signal in {"EARLY ROTATION", "CONFIRMED ROTATION"} and signal_60d == "NO 60D EDGE":
+        return (
+            "Combined read: rotation pressure is visible tactically, but there is not enough "
+            "60D evidence to extend that view into a longer holding-period call."
+        )
+
+    if signal == "AI / GROWTH DOMINANCE":
+        return (
+            "Combined read: AI/growth remains the primary leadership regime. Treat value signals "
+            "as watchlist evidence until rotation broadens."
+        )
+
+    return (
+        "Combined read: use the 20D layer for tactical rotation pressure and the 60D layer "
+        "as the longer-term persistence or exhaustion check."
+    )
 
 
 def shorten_signal(signal: str) -> str:
@@ -458,6 +532,115 @@ else:
 
         st.caption(
             f"Trend compares current score {score} against prior score {prior_score} from {trend_lookback} trading days ago."
+        )
+
+        st.subheader("60D Predictive Layer")
+        signal_60d = "NO 60D EDGE"
+        combined_meaning = get_two_clock_meaning(signal, signal_60d)
+
+        if (
+            download_rotation_prices is None
+            or build_60d_model_dataset is None
+            or predict_latest_60d is None
+        ):
+            st.warning(f"60D model import failed: {ROTATION_60D_IMPORT_ERROR}")
+        else:
+            try:
+                prediction_60d = get_60d_prediction_data()
+
+                signal_60d = prediction_60d.get("signal_60d", "NO 60D EDGE")
+                value_probability_60d = prediction_60d.get("value_probability_60d", None)
+                ai_probability_60d = prediction_60d.get("ai_probability_60d", None)
+                expected_60d = prediction_60d.get("expected_relative_60d", None)
+                train_rows_60d = prediction_60d.get("train_rows", 0)
+                matched_rows_60d = prediction_60d.get("matched_observations", 0)
+                as_of_60d = prediction_60d.get("as_of", "N/A")
+                signal_display_60d = {
+                    "60D VALUE ROTATION PERSISTENCE": "VALUE PERSIST",
+                    "60D AI / GROWTH REASSERTION": "AI REASSERT",
+                    "ROTATION EXTENDED / AI REASSERTION RISK": "AI RISK",
+                    "ROTATION EXTENDED / REVERSAL RISK": "REVERSAL RISK",
+                    "NO 60D EDGE": "NO EDGE",
+                }.get(signal_60d, signal_60d)
+
+                p1, p2, p3, p4 = st.columns(4)
+
+                with p1:
+                    st.metric("60D Signal", signal_display_60d)
+
+                with p2:
+                    st.metric(
+                        "Value Prob",
+                        f"{value_probability_60d:.0%}" if pd.notna(value_probability_60d) else "N/A",
+                    )
+
+                with p3:
+                    st.metric(
+                        "AI Prob",
+                        f"{ai_probability_60d:.0%}" if pd.notna(ai_probability_60d) else "N/A",
+                    )
+
+                with p4:
+                    st.metric(
+                        "Expected Rel",
+                        f"{expected_60d:.2%}" if pd.notna(expected_60d) else "N/A",
+                    )
+
+                if "PERSISTENCE" in signal_60d:
+                    bg_color_60d = "#e9f7ef"
+                    border_color_60d = "#1f8f4d"
+                elif "REASSERTION" in signal_60d or "REVERSAL" in signal_60d:
+                    bg_color_60d = "#fff0f0"
+                    border_color_60d = "#cc3333"
+                else:
+                    bg_color_60d = "#f2f2f2"
+                    border_color_60d = "#777777"
+
+                meaning_60d = get_60d_signal_meaning(signal_60d)
+                combined_meaning = get_two_clock_meaning(signal, signal_60d)
+
+                st.markdown(
+                    f"""
+<div class="signal-box" style="
+    background-color:{bg_color_60d};
+    border-left:7px solid {border_color_60d};
+">
+<b>60D Model:</b> {signal_60d}<br>
+<b>Meaning:</b> {meaning_60d["meaning"]}<br>
+<b>How to Use:</b> {meaning_60d["use"]}<br>
+<b>As Of:</b> {str(as_of_60d)[:10]}<br>
+<b>Matched Observations:</b> {matched_rows_60d:,}<br>
+<b>Training Rows:</b> {train_rows_60d:,}<br>
+<b>Training Window:</b> 5Y
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+            except Exception as e:
+                st.warning(f"60D predictive model could not load: {e}")
+
+        st.subheader("Two-Clock Interpretation")
+
+        if "ROTATION" in signal or "VALUE" in signal:
+            bg_color_combined = "#f7f3e8"
+            border_color_combined = "#8a6d1d"
+        else:
+            bg_color_combined = "#eef5fb"
+            border_color_combined = "#336699"
+
+        st.markdown(
+            f"""
+<div class="recommendation-box" style="
+    background-color:{bg_color_combined};
+    border-left:7px solid {border_color_combined};
+">
+<b>20D Clock:</b> tactical rotation pressure.<br>
+<b>60D Clock:</b> longer-term persistence or exhaustion check.<br>
+<b>Current Meaning:</b> {combined_meaning}
+</div>
+""",
+            unsafe_allow_html=True,
         )
 
         st.subheader("Signal Details")
