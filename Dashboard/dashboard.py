@@ -31,6 +31,18 @@ else:
     ROTATION_IMPORT_ERROR = None
 
 try:
+    from value_ai_rotation.rotation_20_predictive import (
+        build_20d_model_dataset,
+        predict_latest_20d,
+    )
+except Exception as e:
+    build_20d_model_dataset = None
+    predict_latest_20d = None
+    ROTATION_20D_IMPORT_ERROR = e
+else:
+    ROTATION_20D_IMPORT_ERROR = None
+
+try:
     from value_ai_rotation.rotation_60_predictive import (
         build_60d_model_dataset,
         predict_latest_60d,
@@ -145,6 +157,13 @@ def get_60d_prediction_data() -> dict:
     return predict_latest_60d(dataset)
 
 
+@st.cache_data(ttl=3600)
+def get_20d_prediction_data() -> dict:
+    prices = download_rotation_prices(period="5y")
+    dataset = build_20d_model_dataset(prices)
+    return predict_latest_20d(dataset)
+
+
 def plot_price_chart(df: pd.DataFrame, symbol: str):
     df = df.copy()
     price_col = "adjclose" if "adjclose" in df.columns else "close"
@@ -235,6 +254,43 @@ def get_60d_signal_meaning(signal: str) -> dict:
     return {
         "meaning": "60D strategic read: no strong historical edge is present for either value persistence or AI/growth reassertion.",
         "use": "Use the 20D tactical signal for shorter-term positioning, but avoid making a large 60D bet from this read alone.",
+    }
+
+
+def get_20d_quality_meaning(signal: str) -> dict:
+    if signal == "20D HIGH-CONVICTION VALUE ROTATION":
+        return {
+            "meaning": "20D quality read: the rotation score is high and AI internals are not breaking down. Historically, this has been the strongest tactical value-rotation setup.",
+            "use": "Use this as the highest-quality short-term value/quality/defensive tilt signal.",
+        }
+
+    if signal == "20D ROTATION SIGNAL QUALITY WARNING":
+        return {
+            "meaning": "20D quality read: the rotation score is high, but semiconductors are weakening versus broader growth. Historically, that has made the tactical value signal less reliable.",
+            "use": "Use smaller position sizing, wait for confirmation, or avoid chasing the value trade.",
+        }
+
+    if signal == "20D VALUE ROTATION WATCH":
+        return {
+            "meaning": "20D quality read: rotation pressure is visible, but the setup is not yet high-conviction.",
+            "use": "Use this as a watch/partial-tilt signal rather than a full tactical rotation call.",
+        }
+
+    if signal == "20D VALUE ROTATION MIXED":
+        return {
+            "meaning": "20D quality read: the score is elevated but signal quality is mixed.",
+            "use": "Wait for better breadth, credit, volatility, or AI-internals confirmation before increasing exposure.",
+        }
+
+    if signal == "20D EARLY ROTATION":
+        return {
+            "meaning": "20D quality read: rotation is beginning but is still early.",
+            "use": "Monitor value, breadth, and quality leadership before treating this as confirmed.",
+        }
+
+    return {
+        "meaning": "20D quality read: AI/growth dominance or insufficient rotation evidence.",
+        "use": "Do not use this as a value-rotation entry signal.",
     }
 
 
@@ -534,6 +590,87 @@ else:
             f"Trend compares current score {score} against prior score {prior_score} from {trend_lookback} trading days ago."
         )
 
+        st.subheader("20D Signal Quality")
+
+        if (
+            download_rotation_prices is None
+            or build_20d_model_dataset is None
+            or predict_latest_20d is None
+        ):
+            st.warning(f"20D model import failed: {ROTATION_20D_IMPORT_ERROR}")
+        else:
+            try:
+                prediction_20d = get_20d_prediction_data()
+
+                signal_20d = prediction_20d.get("signal_20d", "NO 20D DATA")
+                value_probability_20d = prediction_20d.get("value_probability_20d", None)
+                ai_probability_20d = prediction_20d.get("ai_probability_20d", None)
+                expected_20d = prediction_20d.get("expected_relative_20d", None)
+                matched_rows_20d = prediction_20d.get("matched_observations", 0)
+                ai_internals_weak = prediction_20d.get("ai_internals_weak", False)
+
+                signal_display_20d = {
+                    "20D HIGH-CONVICTION VALUE ROTATION": "HIGH CONV",
+                    "20D ROTATION SIGNAL QUALITY WARNING": "QUALITY WARN",
+                    "20D VALUE ROTATION WATCH": "WATCH",
+                    "20D VALUE ROTATION MIXED": "MIXED",
+                    "20D EARLY ROTATION": "EARLY",
+                    "20D AI / GROWTH DOMINANCE": "AI/GROWTH",
+                    "NO 20D DATA": "NO DATA",
+                }.get(signal_20d, signal_20d)
+
+                q1, q2, q3, q4 = st.columns(4)
+
+                with q1:
+                    st.metric("20D Quality", signal_display_20d)
+
+                with q2:
+                    st.metric(
+                        "Value Prob",
+                        f"{value_probability_20d:.0%}" if pd.notna(value_probability_20d) else "N/A",
+                    )
+
+                with q3:
+                    st.metric(
+                        "Expected Rel",
+                        f"{expected_20d:.2%}" if pd.notna(expected_20d) else "N/A",
+                    )
+
+                with q4:
+                    st.metric("AI Internals", "Weak" if ai_internals_weak else "OK")
+
+                if "HIGH-CONVICTION" in signal_20d:
+                    bg_color_20d = "#e9f7ef"
+                    border_color_20d = "#1f8f4d"
+                elif "WARNING" in signal_20d or "MIXED" in signal_20d:
+                    bg_color_20d = "#fff4e6"
+                    border_color_20d = "#cc7a00"
+                else:
+                    bg_color_20d = "#f2f2f2"
+                    border_color_20d = "#777777"
+
+                meaning_20d = get_20d_quality_meaning(signal_20d)
+
+                st.markdown(
+                    f"""
+<div class="signal-box" style="
+    background-color:{bg_color_20d};
+    border-left:7px solid {border_color_20d};
+">
+<b>20D Quality:</b> {signal_20d}<br>
+<b>Meaning:</b> {meaning_20d["meaning"]}<br>
+<b>How to Use:</b> {meaning_20d["use"]}<br>
+<b>Score / Probability Note:</b> The value probability is the historical hit rate for similar 20D setups. In walk-forward testing, raw score >= 7 had a 53.75% value hit rate; score >= 7 with AI internals OK improved to 62.26%. Current score {score} / {max_score} maps to {f"{value_probability_20d:.0%}" if pd.notna(value_probability_20d) else "N/A"} across {matched_rows_20d:,} matched observations.<br>
+<b>Matched Observations:</b> {matched_rows_20d:,}<br>
+<b>AI Internals:</b> {"Weak" if ai_internals_weak else "OK"}
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
+            except Exception as e:
+                st.warning(f"20D quality model could not load: {e}")
+
         st.subheader("60D Predictive Layer")
         signal_60d = "NO 60D EDGE"
         combined_meaning = get_two_clock_meaning(signal, signal_60d)
@@ -608,6 +745,7 @@ else:
 <b>60D Model:</b> {signal_60d}<br>
 <b>Meaning:</b> {meaning_60d["meaning"]}<br>
 <b>How to Use:</b> {meaning_60d["use"]}<br>
+<b>Score / Probability Note:</b> The 60D probabilities are empirical hit rates from matched historical score buckets. In walk-forward testing, score >= 5 favored AI/growth 87.14% of the time, while score >= 7 favored AI/growth 96.25% of the time.<br>
 <b>As Of:</b> {str(as_of_60d)[:10]}<br>
 <b>Matched Observations:</b> {matched_rows_60d:,}<br>
 <b>Training Rows:</b> {train_rows_60d:,}<br>
