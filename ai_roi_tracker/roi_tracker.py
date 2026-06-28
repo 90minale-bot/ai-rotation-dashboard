@@ -1,4 +1,7 @@
-from keyword_lists import POSITIVE_AI_TERMS, NEUTRAL_AI_TERMS, NEGATIVE_AI_ROI_TERMS
+try:
+    from .keyword_lists import POSITIVE_AI_TERMS, NEUTRAL_AI_TERMS, NEGATIVE_AI_ROI_TERMS
+except ImportError:
+    from keyword_lists import POSITIVE_AI_TERMS, NEUTRAL_AI_TERMS, NEGATIVE_AI_ROI_TERMS
 
 
 def scan_terms(text_lower, term_dict):

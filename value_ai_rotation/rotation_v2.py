@@ -45,6 +45,25 @@ RATIO_SIGNALS = {
     "semis_vs_growth": ("SMH", "QQQ"),
 }
 
+SCORE_INPUT_COLUMNS = [
+    "value_vs_ai_ret_20",
+    "value_vs_ai_trend_up",
+    "industrials_vs_ai_ret_20",
+    "industrials_vs_ai_trend_up",
+    "energy_vs_ai_ret_20",
+    "energy_vs_ai_trend_up",
+    "international_value_vs_ai_ret_20",
+    "international_value_vs_ai_trend_up",
+    "quality_vs_speculation_ret_20",
+    "quality_vs_speculation_trend_up",
+    "market_breadth_ret_20",
+    "market_breadth_trend_up",
+    "TLT_ret_20",
+    "TLT_trend_up",
+    "credit_risk_appetite_ret_20",
+    "VIX_ret_20",
+]
+
 
 def _normalize_history(raw_history: pd.DataFrame) -> pd.DataFrame:
     if raw_history is None or raw_history.empty:
@@ -58,7 +77,7 @@ def _normalize_history(raw_history: pd.DataFrame) -> pd.DataFrame:
     if "date" not in df.columns:
         return pd.DataFrame()
 
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.tz_localize(None)
+    df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce").dt.tz_convert(None)
 
     if "symbol" not in df.columns:
         return pd.DataFrame()
@@ -71,7 +90,7 @@ def _normalize_history(raw_history: pd.DataFrame) -> pd.DataFrame:
     df = df[["date", "symbol", price_col]].rename(columns={price_col: "close"})
     df = df.dropna(subset=["date", "symbol", "close"])
 
-    wide = df.pivot(index="date", columns="symbol", values="close")
+    wide = df.pivot_table(index="date", columns="symbol", values="close", aggfunc="last")
     wide = wide.sort_index()
     wide = wide.ffill().dropna(how="all")
 
@@ -89,26 +108,31 @@ def _safe_ratio(df: pd.DataFrame, numerator: str, denominator: str) -> pd.Series
     if numerator not in df.columns or denominator not in df.columns:
         return pd.Series(index=df.index, dtype=float)
 
-    return df[numerator] / df[denominator]
+    ratio = df[numerator] / df[denominator].replace(0, np.nan)
+    return ratio.replace([np.inf, -np.inf], np.nan)
 
 
 def build_rotation_features(prices: pd.DataFrame) -> pd.DataFrame:
     df = prices.copy()
+    feature_cols = {}
 
     for signal_name, (num, den) in RATIO_SIGNALS.items():
         ratio_col = f"{signal_name}_ratio"
 
-        df[ratio_col] = _safe_ratio(df, num, den)
+        ratio = _safe_ratio(df, num, den)
+        ma_20 = ratio.rolling(20).mean()
+        ma_60 = ratio.rolling(60).mean()
 
-        df[f"{signal_name}_ret_5"] = df[ratio_col].pct_change(5)
-        df[f"{signal_name}_ret_20"] = df[ratio_col].pct_change(20)
-        df[f"{signal_name}_ret_60"] = df[ratio_col].pct_change(60)
-
-        df[f"{signal_name}_ma_20"] = df[ratio_col].rolling(20).mean()
-        df[f"{signal_name}_ma_60"] = df[ratio_col].rolling(60).mean()
-
-        df[f"{signal_name}_trend_up"] = (
-            df[f"{signal_name}_ma_20"] > df[f"{signal_name}_ma_60"]
+        feature_cols.update(
+            {
+                ratio_col: ratio,
+                f"{signal_name}_ret_5": ratio.pct_change(5, fill_method=None),
+                f"{signal_name}_ret_20": ratio.pct_change(20, fill_method=None),
+                f"{signal_name}_ret_60": ratio.pct_change(60, fill_method=None),
+                f"{signal_name}_ma_20": ma_20,
+                f"{signal_name}_ma_60": ma_60,
+                f"{signal_name}_trend_up": ma_20 > ma_60,
+            }
         )
 
     standalone_tickers = [
@@ -133,14 +157,36 @@ def build_rotation_features(prices: pd.DataFrame) -> pd.DataFrame:
     for ticker in standalone_tickers:
         if ticker in df.columns:
             clean_name = ticker.replace("^", "")
-            df[f"{clean_name}_ret_5"] = df[ticker].pct_change(5)
-            df[f"{clean_name}_ret_20"] = df[ticker].pct_change(20)
-            df[f"{clean_name}_ret_60"] = df[ticker].pct_change(60)
-            df[f"{clean_name}_ma_20"] = df[ticker].rolling(20).mean()
-            df[f"{clean_name}_ma_60"] = df[ticker].rolling(60).mean()
-            df[f"{clean_name}_trend_up"] = df[f"{clean_name}_ma_20"] > df[f"{clean_name}_ma_60"]
+            ma_20 = df[ticker].rolling(20).mean()
+            ma_60 = df[ticker].rolling(60).mean()
 
-    return df
+            feature_cols.update(
+                {
+                    f"{clean_name}_ret_5": df[ticker].pct_change(5, fill_method=None),
+                    f"{clean_name}_ret_20": df[ticker].pct_change(20, fill_method=None),
+                    f"{clean_name}_ret_60": df[ticker].pct_change(60, fill_method=None),
+                    f"{clean_name}_ma_20": ma_20,
+                    f"{clean_name}_ma_60": ma_60,
+                    f"{clean_name}_trend_up": ma_20 > ma_60,
+                }
+            )
+
+    if not feature_cols:
+        return df
+
+    return pd.concat([df, pd.DataFrame(feature_cols, index=df.index)], axis=1)
+
+
+def _latest_scored_row(features: pd.DataFrame) -> pd.Series | None:
+    available_cols = [c for c in SCORE_INPUT_COLUMNS if c in features.columns]
+    if not available_cols:
+        return None
+
+    scored_rows = features.dropna(subset=available_cols, how="all")
+    if scored_rows.empty:
+        return None
+
+    return scored_rows.iloc[-1]
 
 
 def score_latest_rotation(features: pd.DataFrame) -> dict:
@@ -152,7 +198,14 @@ def score_latest_rotation(features: pd.DataFrame) -> dict:
             "details": {},
         }
 
-    latest = features.dropna(how="all").iloc[-1]
+    latest = _latest_scored_row(features)
+    if latest is None:
+        return {
+            "rotation_score": np.nan,
+            "max_score": 9,
+            "signal": "NO DATA",
+            "details": {},
+        }
 
     score = 0
     details = {}
@@ -230,7 +283,7 @@ def score_latest_rotation(features: pd.DataFrame) -> dict:
         "max_score": 9,
         "signal": signal,
         "details": details,
-        "as_of": features.index[-1],
+        "as_of": latest.name,
     }
 
 
