@@ -112,3 +112,30 @@ The app translates signals into **portfolio bias guidance**:
 - 📱 Web-accessible dashboard
 
 ---
+
+# Newsletter Launch
+
+This repo includes a Week 1 launch kit for **Rotation Clock Weekly**, a free weekly market note based on the dashboard's two-clock framework:
+
+- 20D clock: tactical rotation pressure
+- 60D clock: rotation persistence or exhaustion risk
+
+Launch docs:
+
+- `launch/week_1_launch_plan.md`
+- `launch/landing_page_copy.md`
+- `launch/weekly_note_template.md`
+
+The live Substack publication is:
+
+- https://financenow11.substack.com
+
+The first published article is:
+
+- https://financenow11.substack.com/p/why-i-built-a-two-clock-dashboard
+
+If you deploy this on Streamlit Cloud, add this value to Streamlit Cloud secrets:
+
+```toml
+NEWSLETTER_SIGNUP_URL = "https://financenow11.substack.com"
+```
