@@ -5,6 +5,7 @@ AI vs Value Rotation Analytics Dashboard
 """
 
 import sys
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -15,6 +16,15 @@ from yahooquery import Ticker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
+
+PUBLICATION_NAME = "Rotation Clock Weekly"
+PUBLICATION_TAGLINE = (
+    "A two-clock read on AI/growth leadership, tactical value rotation, "
+    "and when not to chase the trade."
+)
+DEFAULT_SIGNUP_URL = "https://financenow11.substack.com"
+FIRST_ARTICLE_URL = "https://financenow11.substack.com/p/why-i-built-a-two-clock-dashboard"
+FIRST_ARTICLE_TITLE = "Why I Built a Two-Clock Dashboard for AI vs Value Rotation"
 
 try:
     from value_ai_rotation.rotation_v2 import (
@@ -128,6 +138,17 @@ def get_query_symbol(default_symbol="QQQ"):
         return st.query_params.get("symbol", default_symbol).upper()
     except Exception:
         return default_symbol
+
+
+def get_newsletter_signup_url() -> str:
+    env_url = os.getenv("NEWSLETTER_SIGNUP_URL")
+    if env_url:
+        return env_url
+
+    try:
+        return st.secrets.get("NEWSLETTER_SIGNUP_URL", DEFAULT_SIGNUP_URL)
+    except Exception:
+        return DEFAULT_SIGNUP_URL
 
 
 @st.cache_data(ttl=3600)
@@ -400,6 +421,14 @@ def get_recommendation(signal: str, trend_label: str) -> dict:
 
 st.sidebar.title("AI vs Value Rotation")
 
+signup_url = get_newsletter_signup_url()
+
+st.sidebar.markdown("---")
+st.sidebar.subheader(PUBLICATION_NAME)
+st.sidebar.caption(PUBLICATION_TAGLINE)
+st.sidebar.markdown(f"[Join the free weekly note]({signup_url})")
+st.sidebar.markdown(f"[Read the first article]({FIRST_ARTICLE_URL})")
+
 default_symbol = get_query_symbol("QQQ")
 
 symbol = st.sidebar.text_input("Market Proxy / Ticker", value=default_symbol).upper()
@@ -434,6 +463,26 @@ st.title("AI vs Value Rotation Analytics")
 st.caption(
     "Market regime dashboard tracking AI/growth versus value, cyclicals, quality, credit, and breadth."
 )
+
+with st.expander(f"{PUBLICATION_NAME}: weekly market note", expanded=True):
+    st.markdown(
+        f"""
+**{PUBLICATION_TAGLINE}**
+
+The weekly note turns the dashboard into a short market brief:
+
+- 20D tactical rotation pressure
+- 20D signal quality and AI internals
+- 60D rotation-extension or AI-reassertion risk
+- the news that explains what moved the signal
+
+Free subscribers get the weekly dashboard read and the plain-English bottom line.
+"""
+    )
+
+    st.markdown(f"**First article:** [{FIRST_ARTICLE_TITLE}]({FIRST_ARTICLE_URL})")
+
+    st.markdown(f"[Join the free weekly note]({signup_url})")
 
 
 # ============================================================
