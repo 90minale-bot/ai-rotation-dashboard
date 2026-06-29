@@ -221,6 +221,55 @@ def plot_price_chart(df: pd.DataFrame, symbol: str):
     return fig
 
 
+def plot_probability_meter(
+    probability: float | None,
+    title: str,
+    label: str,
+    bar_color: str,
+):
+    value = None
+    if probability is not None and pd.notna(probability):
+        value = max(0, min(100, probability * 100))
+
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=value if value is not None else 0,
+            number={"suffix": "%", "font": {"size": 34}},
+            title={
+                "text": f"<b>{title}</b><br><span style='font-size:0.85em;color:#666'>{label}</span>",
+                "font": {"size": 16},
+            },
+            gauge={
+                "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#777"},
+                "bar": {"color": bar_color, "thickness": 0.28},
+                "bgcolor": "white",
+                "borderwidth": 1,
+                "bordercolor": "#dddddd",
+                "steps": [
+                    {"range": [0, 40], "color": "#f2f2f2"},
+                    {"range": [40, 60], "color": "#fff4d6"},
+                    {"range": [60, 100], "color": "#e8f2ff"},
+                ],
+                "threshold": {
+                    "line": {"color": "#333333", "width": 3},
+                    "thickness": 0.75,
+                    "value": 50,
+                },
+            },
+        )
+    )
+
+    fig.update_layout(
+        height=285,
+        margin={"l": 25, "r": 25, "t": 90, "b": 15},
+        paper_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#30313f"},
+    )
+
+    return fig
+
+
 def classify_price_trend(df: pd.DataFrame):
     if df.empty or "close" not in df.columns or len(df) < 60:
         return "Not enough data"
@@ -639,7 +688,7 @@ else:
             f"Trend compares current score {score} against prior score {prior_score} from {trend_lookback} trading days ago."
         )
 
-        st.subheader("20D Signal Quality")
+        st.subheader("20D Rotation Meter")
 
         if (
             download_rotation_prices is None
@@ -671,7 +720,7 @@ else:
                 q1, q2, q3, q4 = st.columns(4)
 
                 with q1:
-                    st.metric("20D Quality", signal_display_20d)
+                    st.metric("20D Signal", signal_display_20d)
 
                 with q2:
                     st.metric(
@@ -681,24 +730,40 @@ else:
 
                 with q3:
                     st.metric(
+                        "AI Prob",
+                        f"{ai_probability_20d:.0%}" if pd.notna(ai_probability_20d) else "N/A",
+                    )
+
+                with q4:
+                    st.metric(
                         "Expected Rel",
                         f"{expected_20d:.2%}" if pd.notna(expected_20d) else "N/A",
                     )
 
-                with q4:
-                    st.metric("AI Internals", "Weak" if ai_internals_weak else "OK")
-
                 if "HIGH-CONVICTION" in signal_20d:
                     bg_color_20d = "#e9f7ef"
                     border_color_20d = "#1f8f4d"
+                    meter_color_20d = "#1f8f4d"
                 elif "WARNING" in signal_20d or "MIXED" in signal_20d:
                     bg_color_20d = "#fff4e6"
                     border_color_20d = "#cc7a00"
+                    meter_color_20d = "#cc7a00"
                 else:
                     bg_color_20d = "#f2f2f2"
                     border_color_20d = "#777777"
+                    meter_color_20d = "#777777"
 
                 meaning_20d = get_20d_quality_meaning(signal_20d)
+
+                st.plotly_chart(
+                    plot_probability_meter(
+                        value_probability_20d,
+                        "20D Value Rotation Pressure",
+                        "Short-term probability that value beats AI/growth",
+                        meter_color_20d,
+                    ),
+                    use_container_width=True,
+                )
 
                 st.markdown(
                     f"""
@@ -706,7 +771,7 @@ else:
     background-color:{bg_color_20d};
     border-left:7px solid {border_color_20d};
 ">
-<b>20D Quality:</b> {signal_20d}<br>
+<b>20D Signal:</b> {signal_20d}<br>
 <b>Meaning:</b> {meaning_20d["meaning"]}<br>
 <b>How to Use:</b> {meaning_20d["use"]}<br>
 <b>Score / Probability Note:</b> The value probability is the historical hit rate for similar 20D setups. In walk-forward testing, raw score >= 7 had a 53.75% value hit rate; score >= 7 with AI internals OK improved to 62.26%. Current score {score} / {max_score} maps to {f"{value_probability_20d:.0%}" if pd.notna(value_probability_20d) else "N/A"} across {matched_rows_20d:,} matched observations.<br>
@@ -720,7 +785,7 @@ else:
             except Exception as e:
                 st.warning(f"20D quality model could not load: {e}")
 
-        st.subheader("60D Predictive Layer")
+        st.subheader("60D Rotation Meter")
         signal_60d = "NO 60D EDGE"
         combined_meaning = get_two_clock_meaning(signal, signal_60d)
 
@@ -775,15 +840,28 @@ else:
                 if "PERSISTENCE" in signal_60d:
                     bg_color_60d = "#e9f7ef"
                     border_color_60d = "#1f8f4d"
+                    meter_color_60d = "#1f8f4d"
                 elif "REASSERTION" in signal_60d or "REVERSAL" in signal_60d:
                     bg_color_60d = "#fff0f0"
                     border_color_60d = "#cc3333"
+                    meter_color_60d = "#cc3333"
                 else:
                     bg_color_60d = "#f2f2f2"
                     border_color_60d = "#777777"
+                    meter_color_60d = "#777777"
 
                 meaning_60d = get_60d_signal_meaning(signal_60d)
                 combined_meaning = get_two_clock_meaning(signal, signal_60d)
+
+                st.plotly_chart(
+                    plot_probability_meter(
+                        ai_probability_60d,
+                        "60D AI Reassertion Risk",
+                        "Longer-term probability that AI/growth retakes leadership",
+                        meter_color_60d,
+                    ),
+                    use_container_width=True,
+                )
 
                 st.markdown(
                     f"""
@@ -791,7 +869,7 @@ else:
     background-color:{bg_color_60d};
     border-left:7px solid {border_color_60d};
 ">
-<b>60D Model:</b> {signal_60d}<br>
+<b>60D Signal:</b> {signal_60d}<br>
 <b>Meaning:</b> {meaning_60d["meaning"]}<br>
 <b>How to Use:</b> {meaning_60d["use"]}<br>
 <b>Score / Probability Note:</b> The 60D probabilities are empirical hit rates from matched historical score buckets. In walk-forward testing, score >= 5 favored AI/growth 87.14% of the time, while score >= 7 favored AI/growth 96.25% of the time.<br>
