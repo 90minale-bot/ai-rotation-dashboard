@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from yahooquery import Ticker
 
 
@@ -26,6 +27,7 @@ PUBLICATION_TAGLINE = (
 DEFAULT_SIGNUP_URL = "https://financenow11.substack.com"
 FIRST_ARTICLE_URL = "https://financenow11.substack.com/p/why-i-built-a-two-clock-dashboard"
 FIRST_ARTICLE_TITLE = "Why I Built a Two-Clock Dashboard for AI vs Value Rotation"
+CLOCK_TREND_START_DATE = "2026-02-01"
 
 try:
     from value_ai_rotation.rotation_v2 import (
@@ -218,14 +220,17 @@ def get_20d_prediction_data() -> dict:
     return predict_latest_20d(dataset)
 
 
-def get_clock_trend_data(lookback_days: int = 30) -> pd.DataFrame:
+def get_clock_trend_data(start_date: str = CLOCK_TREND_START_DATE) -> pd.DataFrame:
     prices = download_rotation_prices(period="5y")
+    start_timestamp = pd.Timestamp(start_date)
 
     dataset_20d = build_20d_model_dataset(prices)
-    trend_20d = predict_recent_20d(dataset_20d, lookback_days=lookback_days)
+    lookback_20d = max(30, int((dataset_20d.dropna(subset=["rotation_score"]).index >= start_timestamp).sum()))
+    trend_20d = predict_recent_20d(dataset_20d, lookback_days=lookback_20d)
 
     dataset_60d = build_60d_model_dataset(prices)
-    trend_60d = predict_recent_60d(dataset_60d, lookback_days=lookback_days)
+    lookback_60d = max(30, int((dataset_60d.dropna(subset=["rotation_score"]).index >= start_timestamp).sum()))
+    trend_60d = predict_recent_60d(dataset_60d, lookback_days=lookback_60d)
 
     if trend_20d.empty and trend_60d.empty:
         return pd.DataFrame()
@@ -255,7 +260,7 @@ def get_clock_trend_data(lookback_days: int = 30) -> pd.DataFrame:
         combined = combined[~combined.index.duplicated(keep="last")]
 
     combined.index = pd.to_datetime(combined.index)
-    return combined.sort_index().tail(lookback_days)
+    return combined.sort_index()[combined.sort_index().index >= start_timestamp]
 
 
 @st.cache_data(ttl=3600)
@@ -491,123 +496,346 @@ def get_favored_read(value_probability: float | None, ai_probability: float | No
 
 
 def plot_clock_trend(trend_df: pd.DataFrame):
-    fig = go.Figure()
-
     value_color = "#1f8f4d"
     ai_color = "#1f77b4"
+    y_values = [50.0]
+
+    series_config = []
+    if {"20D Favors Value", "20D Favors AI"}.issubset(trend_df.columns):
+        ai_probability = trend_df["20D Favors AI"] * 100
+        y_values.extend(ai_probability.dropna().tolist())
+        series_config.append(
+            {
+                "row": 1,
+                "clock": "20D",
+                "series": ai_probability,
+                "line": {"color": "#111111", "width": 3},
+            }
+        )
+
+    if {"60D Favors Value", "60D Favors AI"}.issubset(trend_df.columns):
+        ai_probability = trend_df["60D Favors AI"] * 100
+        y_values.extend(ai_probability.dropna().tolist())
+        series_config.append(
+            {
+                "row": 2,
+                "clock": "60D",
+                "series": ai_probability,
+                "line": {"color": "#777777", "width": 3, "dash": "dash"},
+            }
+        )
+
+    y_min = min(y_values)
+    y_max = max(y_values)
+    y_span = max(y_max - y_min, 1)
+    y_padding = max(4, y_span * 0.25)
+    y_range = [
+        max(0, np.floor(y_min - y_padding)),
+        min(100, np.ceil(y_max + y_padding)),
+    ]
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.13,
+        subplot_titles=("20D Clock", "60D Clock"),
+    )
 
     fig.add_trace(
         go.Scatter(
             x=[trend_df.index[0]],
-            y=[0],
+            y=[50],
             mode="markers",
             name="Marker: favors Value",
             visible="legendonly",
             marker={"size": 10, "color": value_color},
             hoverinfo="skip",
-        )
+        ),
+        row=1,
+        col=1,
     )
 
     fig.add_trace(
         go.Scatter(
             x=[trend_df.index[0]],
-            y=[0],
+            y=[50],
             mode="markers",
-            name="Marker: favors AI",
+            name="Marker: favors AI/Growth",
             visible="legendonly",
             marker={"size": 10, "color": ai_color},
             hoverinfo="skip",
-        )
+        ),
+        row=1,
+        col=1,
     )
 
-    if {"20D Favors Value", "20D Favors AI"}.issubset(trend_df.columns):
-        favors_value = trend_df["20D Favors Value"] >= trend_df["20D Favors AI"]
-        favored_probability = trend_df[["20D Favors Value", "20D Favors AI"]].max(axis=1)
-        fig.add_trace(
-            go.Scatter(
-                x=[trend_df.index[0]],
-                y=[favored_probability.iloc[0] * 100],
-                mode="lines+markers",
-                name="20D Clock",
-                visible="legendonly",
-                line={"color": "#111111", "width": 3},
-                marker={"size": 8, "color": "#111111"},
-                hoverinfo="skip",
-            )
+    for yref in ("y", "y2"):
+        fig.add_shape(
+            type="rect",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref=yref,
+            y0=y_range[0],
+            y1=50,
+            fillcolor=value_color,
+            opacity=0.07,
+            line_width=0,
+            layer="below",
+        )
+        fig.add_shape(
+            type="rect",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref=yref,
+            y0=50,
+            y1=y_range[1],
+            fillcolor=ai_color,
+            opacity=0.07,
+            line_width=0,
+            layer="below",
+        )
+
+    for config in series_config:
+        row = config["row"]
+        clock = config["clock"]
+        ai_probability = config["series"]
+        favors_ai = ai_probability >= 50
+
+        fig.add_hline(
+            y=50,
+            line_dash="dash",
+            line_color="#777777",
+            annotation_text="50% line",
+            annotation_position="bottom right",
+            row=row,
+            col=1,
         )
         fig.add_trace(
             go.Scatter(
                 x=trend_df.index,
-                y=favored_probability * 100,
+                y=ai_probability,
                 mode="lines+markers",
-                name="20D Clock",
-                showlegend=False,
-                line={"color": "#111111", "width": 3},
+                name=f"{clock} Clock",
+                line=config["line"],
                 marker={
                     "size": 8,
-                    "color": [value_color if side else ai_color for side in favors_value],
+                    "color": [ai_color if side else value_color for side in favors_ai],
                     "line": {"color": "white", "width": 1},
                 },
                 customdata=[
-                    ["Value" if side else "AI"] for side in favors_value
+                    ["AI/Growth" if side else "Value"] for side in favors_ai
                 ],
-                hovertemplate="%{x|%b %d, %Y}<br>20D favors %{customdata[0]}<br>Probability: %{y:.1f}%<extra></extra>",
-            )
+                hovertemplate=f"%{{x|%b %d, %Y}}<br>{clock} favors %{{customdata[0]}}<br>AI/Growth probability: %{{y:.1f}}%<extra></extra>",
+            ),
+            row=row,
+            col=1,
         )
 
-    if {"60D Favors Value", "60D Favors AI"}.issubset(trend_df.columns):
-        favors_value = trend_df["60D Favors Value"] >= trend_df["60D Favors AI"]
-        favored_probability = trend_df[["60D Favors Value", "60D Favors AI"]].max(axis=1)
-        fig.add_trace(
-            go.Scatter(
-                x=[trend_df.index[0]],
-                y=[favored_probability.iloc[0] * 100],
-                mode="lines+markers",
-                name="60D Clock",
-                visible="legendonly",
-                line={"color": "#777777", "width": 3, "dash": "dash"},
-                marker={"size": 8, "color": "#777777"},
-                hoverinfo="skip",
+    fig.update_layout(
+        title="Clock Trend Since Feb 2026",
+        height=560,
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.08, "x": 0},
+        margin={"l": 40, "r": 20, "t": 80, "b": 40},
+    )
+    fig.update_xaxes(title_text="As-of Date", row=2, col=1)
+    fig.update_yaxes(title_text="AI/Growth Probability", range=y_range, ticksuffix="%", row=1, col=1)
+    fig.update_yaxes(title_text="AI/Growth Probability", range=y_range, ticksuffix="%", row=2, col=1)
+
+    return fig
+
+
+def build_clock_outcome_alignment(clock_trend: pd.DataFrame, qqq_df: pd.DataFrame) -> pd.DataFrame:
+    price_col = "adjclose" if "adjclose" in qqq_df.columns else "close"
+    price_data = qqq_df.copy()
+    price_data["date"] = pd.to_datetime(price_data["date"], errors="coerce")
+    price_data = price_data.dropna(subset=["date", price_col]).sort_values("date")
+    price_data = price_data[price_data["date"] >= pd.Timestamp(CLOCK_TREND_START_DATE)]
+    price_series = price_data.set_index("date")[price_col]
+
+    aligned = clock_trend.copy()
+    aligned.index = pd.to_datetime(aligned.index)
+
+    qqq_forward_20d = price_series.shift(-20) / price_series - 1
+    qqq_forward_60d = price_series.shift(-60) / price_series - 1
+    aligned["QQQ Forward 20D"] = qqq_forward_20d.reindex(aligned.index)
+    aligned["QQQ Forward 60D"] = qqq_forward_60d.reindex(aligned.index)
+    return aligned
+
+
+def summarize_clock_outcomes(aligned: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for clock, prob_col, return_col in [
+        ("20D", "20D Favors AI", "QQQ Forward 20D"),
+        ("60D", "60D Favors AI", "QQQ Forward 60D"),
+    ]:
+        if prob_col not in aligned.columns or return_col not in aligned.columns:
+            continue
+
+        for read, mask in [
+            ("Favors AI/Growth", aligned[prob_col] >= 0.5),
+            ("Favors Value", aligned[prob_col] < 0.5),
+        ]:
+            sample = aligned.loc[mask].dropna(subset=[return_col])
+            if sample.empty:
+                rows.append(
+                    {
+                        "Clock": clock,
+                        "Read": read,
+                        "Matched Dates": 0,
+                        "QQQ Up Rate": "N/A",
+                        "Avg QQQ Return": "N/A",
+                        "Median QQQ Return": "N/A",
+                    }
+                )
+                continue
+
+            rows.append(
+                {
+                    "Clock": clock,
+                    "Read": read,
+                    "Matched Dates": f"{len(sample):,}",
+                    "QQQ Up Rate": f"{(sample[return_col] > 0).mean():.1%}",
+                    "Avg QQQ Return": f"{sample[return_col].mean():.2%}",
+                    "Median QQQ Return": f"{sample[return_col].median():.2%}",
+                }
             )
-        )
+
+    return pd.DataFrame(rows)
+
+
+def plot_clock_vs_qqq(aligned: pd.DataFrame):
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.12,
+        subplot_titles=("Realized QQQ Forward Return", "Clock Projection From That Date"),
+    )
+
+    for label, col_name, dash, color in [
+        ("QQQ Next 20D", "QQQ Forward 20D", "solid", "#111111"),
+        ("QQQ Next 60D", "QQQ Forward 60D", "dash", "#777777"),
+    ]:
+        if col_name not in aligned.columns:
+            continue
         fig.add_trace(
             go.Scatter(
-                x=trend_df.index,
-                y=favored_probability * 100,
+                x=aligned.index,
+                y=aligned[col_name] * 100,
+                mode="lines",
+                name=label,
+                line={"color": color, "width": 3, "dash": dash},
+                hovertemplate=f"%{{x|%b %d, %Y}}<br>{label} return: %{{y:.2f}}%<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    value_color = "#1f8f4d"
+    ai_color = "#1f77b4"
+    y_values = [50.0]
+
+    for clock, dash, color, col_name in [
+        ("20D", "solid", "#111111", "20D Favors AI"),
+        ("60D", "dash", "#777777", "60D Favors AI"),
+    ]:
+        if col_name not in aligned.columns:
+            continue
+
+        ai_probability = pd.to_numeric(aligned[col_name], errors="coerce") * 100
+        y_values.extend(ai_probability.dropna().tolist())
+        favors_ai = ai_probability >= 50
+
+        fig.add_trace(
+            go.Scatter(
+                x=aligned.index,
+                y=ai_probability,
                 mode="lines+markers",
-                name="60D Clock",
-                showlegend=False,
-                line={"color": "#777777", "width": 3, "dash": "dash"},
+                name=f"{clock} Clock",
+                line={"color": color, "width": 3, "dash": dash},
                 marker={
-                    "size": 8,
-                    "color": [value_color if side else ai_color for side in favors_value],
+                    "size": 7,
+                    "color": [ai_color if side else value_color for side in favors_ai],
                     "line": {"color": "white", "width": 1},
                 },
                 customdata=[
-                    ["Value" if side else "AI"] for side in favors_value
+                    ["AI/Growth" if side else "Value"] for side in favors_ai
                 ],
-                hovertemplate="%{x|%b %d, %Y}<br>60D favors %{customdata[0]}<br>Probability: %{y:.1f}%<extra></extra>",
-            )
+                hovertemplate=f"%{{x|%b %d, %Y}}<br>{clock} favors %{{customdata[0]}}<br>AI/Growth probability: %{{y:.1f}}%<extra></extra>",
+            ),
+            row=2,
+            col=1,
         )
 
+    fig.add_hline(
+        y=0,
+        line_dash="dash",
+        line_color="#777777",
+        annotation_text="0% line",
+        annotation_position="bottom right",
+        row=1,
+        col=1,
+    )
+
+    y_min = min(y_values)
+    y_max = max(y_values)
+    y_span = max(y_max - y_min, 1)
+    y_padding = max(4, y_span * 0.25)
+    y_range = [
+        max(0, np.floor(y_min - y_padding)),
+        min(100, np.ceil(y_max + y_padding)),
+    ]
+
+    fig.add_shape(
+        type="rect",
+        xref="paper",
+        x0=0,
+        x1=1,
+        yref="y2",
+        y0=y_range[0],
+        y1=50,
+        fillcolor=value_color,
+        opacity=0.07,
+        line_width=0,
+        layer="below",
+    )
+    fig.add_shape(
+        type="rect",
+        xref="paper",
+        x0=0,
+        x1=1,
+        yref="y2",
+        y0=50,
+        y1=y_range[1],
+        fillcolor=ai_color,
+        opacity=0.07,
+        line_width=0,
+        layer="below",
+    )
     fig.add_hline(
         y=50,
         line_dash="dash",
         line_color="#777777",
         annotation_text="50% line",
         annotation_position="bottom right",
+        row=2,
+        col=1,
     )
 
     fig.update_layout(
-        title="30D Clock Trend",
-        xaxis_title="As-of Date",
-        yaxis_title="Probability",
-        yaxis={"range": [0, 100], "ticksuffix": "%"},
-        height=420,
+        title="Clock Projection vs Realized QQQ Forward Return",
+        height=620,
         hovermode="x unified",
         legend={"orientation": "h", "y": 1.08, "x": 0},
-        margin={"l": 40, "r": 20, "t": 80, "b": 40},
+        margin={"l": 40, "r": 20, "t": 85, "b": 40},
     )
+    fig.update_xaxes(title_text="As-of Date", row=2, col=1)
+    fig.update_yaxes(title_text="Realized QQQ Return", ticksuffix="%", zeroline=True, row=1, col=1)
+    fig.update_yaxes(title_text="AI/Growth Probability", range=y_range, ticksuffix="%", row=2, col=1)
 
     return fig
 
@@ -1346,7 +1574,7 @@ else:
             except Exception as e:
                 st.warning(f"QQQ direction model could not load: {e}")
 
-        st.subheader("30D Clock Trend")
+        st.subheader("Clock Trend Since Feb 2026")
 
         if (
             download_rotation_prices is None
@@ -1359,10 +1587,10 @@ else:
         else:
             try:
                 saved_history, history_path = save_current_clock_snapshot()
-                clock_trend = get_clock_trend_data(lookback_days=30)
+                clock_trend = get_clock_trend_data(start_date=CLOCK_TREND_START_DATE)
 
                 if clock_trend.empty:
-                    st.info("Not enough history to build the 30D clock trend.")
+                    st.info("Not enough history to build the clock trend.")
                 else:
                     st.plotly_chart(plot_clock_trend(clock_trend), use_container_width=True)
 
@@ -1374,7 +1602,8 @@ else:
                     )
                     st.caption(
                         "The chart starts with backdated reads, then keeps a saved daily record as time progresses. "
-                        "Green means the clock favors value; blue means the clock favors AI/growth. "
+                        "Above 50% favors AI/growth; below 50% favors value. "
+                        "Blue markers favor AI/growth; green markers favor value. "
                         f"{history_note}"
                     )
 
@@ -1403,6 +1632,24 @@ else:
                         display_trend = display_trend.rename(columns={"rotation_score": "Score"})
 
                     st.dataframe(display_trend, use_container_width=True, hide_index=True)
+
+                    st.subheader("Clock Projection vs QQQ Outcome")
+                    qqq_outcome_df = download_stock_data("QQQ", period="1y")
+                    if qqq_outcome_df.empty:
+                        st.warning("QQQ outcome data could not load.")
+                    else:
+                        aligned_outcomes = build_clock_outcome_alignment(clock_trend, qqq_outcome_df)
+                        st.plotly_chart(plot_clock_vs_qqq(aligned_outcomes), use_container_width=True)
+                        st.caption(
+                            "Outcome check: each clock read is compared with QQQ's realized forward return over the matching horizon. "
+                            "A 20D clock read is compared with QQQ's next 20 trading days; a 60D clock read is compared with QQQ's next 60 trading days. "
+                            "Recent dates may be blank because the full forward window has not happened yet."
+                        )
+                        st.dataframe(
+                            summarize_clock_outcomes(aligned_outcomes),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
             except Exception as e:
                 st.warning(f"30D clock trend could not load: {e}")
