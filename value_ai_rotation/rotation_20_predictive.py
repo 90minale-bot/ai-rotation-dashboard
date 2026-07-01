@@ -260,6 +260,37 @@ def predict_latest_20d(dataset: pd.DataFrame) -> dict:
     }
 
 
+def predict_recent_20d(dataset: pd.DataFrame, lookback_days: int = 30) -> pd.DataFrame:
+    relative_col = f"relative_forward_{HORIZON_DAYS}d"
+
+    usable = dataset.dropna(subset=["rotation_score"]).copy()
+    rows = []
+
+    for as_of, row in usable.tail(lookback_days).iterrows():
+        row_position = dataset.index.get_loc(as_of)
+        if isinstance(row_position, slice):
+            row_position = row_position.stop - 1
+
+        train_end = max(0, int(row_position) - HORIZON_DAYS)
+        train = dataset.iloc[:train_end].dropna(subset=["rotation_score", relative_col]).copy()
+        train["signal_group_20d"] = train.apply(signal_group, axis=1)
+
+        prediction = empirical_20d_prediction(train, row)
+        rows.append(
+            {
+                "date": as_of,
+                "rotation_score": float(row["rotation_score"]),
+                "train_rows": int(len(train)),
+                **prediction,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows).set_index("date")
+
+
 def format_percent_table(summary: pd.DataFrame) -> pd.DataFrame:
     if summary.empty:
         return summary

@@ -8,6 +8,7 @@ import sys
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
@@ -44,10 +45,12 @@ try:
     from value_ai_rotation.rotation_20_predictive import (
         build_20d_model_dataset,
         predict_latest_20d,
+        predict_recent_20d,
     )
 except Exception as e:
     build_20d_model_dataset = None
     predict_latest_20d = None
+    predict_recent_20d = None
     ROTATION_20D_IMPORT_ERROR = e
 else:
     ROTATION_20D_IMPORT_ERROR = None
@@ -56,13 +59,27 @@ try:
     from value_ai_rotation.rotation_60_predictive import (
         build_60d_model_dataset,
         predict_latest_60d,
+        predict_recent_60d,
     )
 except Exception as e:
     build_60d_model_dataset = None
     predict_latest_60d = None
+    predict_recent_60d = None
     ROTATION_60D_IMPORT_ERROR = e
 else:
     ROTATION_60D_IMPORT_ERROR = None
+
+try:
+    from value_ai_rotation.rotation_continuous_predictive import (
+        build_model_agreement,
+        build_qqq_direction_agreement,
+    )
+except Exception as e:
+    build_model_agreement = None
+    build_qqq_direction_agreement = None
+    CONTINUOUS_MODEL_IMPORT_ERROR = e
+else:
+    CONTINUOUS_MODEL_IMPORT_ERROR = None
 
 
 st.set_page_config(
@@ -185,6 +202,143 @@ def get_20d_prediction_data() -> dict:
     return predict_latest_20d(dataset)
 
 
+@st.cache_data(ttl=3600)
+def get_clock_trend_data(lookback_days: int = 30) -> pd.DataFrame:
+    prices = download_rotation_prices(period="5y")
+
+    dataset_20d = build_20d_model_dataset(prices)
+    trend_20d = predict_recent_20d(dataset_20d, lookback_days=lookback_days)
+
+    dataset_60d = build_60d_model_dataset(prices)
+    trend_60d = predict_recent_60d(dataset_60d, lookback_days=lookback_days)
+
+    if trend_20d.empty and trend_60d.empty:
+        return pd.DataFrame()
+
+    combined = pd.DataFrame(index=trend_20d.index.union(trend_60d.index))
+
+    if not trend_20d.empty:
+        combined["rotation_score"] = trend_20d["rotation_score"]
+        combined["20D Signal"] = trend_20d["signal_20d"]
+        combined["20D Favors Value"] = trend_20d["value_probability_20d"]
+        combined["20D Favors AI"] = trend_20d["ai_probability_20d"]
+        combined["20D Expected Rel"] = trend_20d["expected_relative_20d"]
+        combined["20D Matched Obs"] = trend_20d["matched_observations"]
+
+    if not trend_60d.empty:
+        combined["rotation_score"] = combined.get("rotation_score", trend_60d["rotation_score"])
+        combined["60D Signal"] = trend_60d["signal_60d"]
+        combined["60D Favors Value"] = trend_60d["value_probability_60d"]
+        combined["60D Favors AI"] = trend_60d["ai_probability_60d"]
+        combined["60D Expected Rel"] = trend_60d["expected_relative_60d"]
+        combined["60D Matched Obs"] = trend_60d["matched_observations"]
+
+    combined.index = pd.to_datetime(combined.index)
+    return combined.sort_index().tail(lookback_days)
+
+
+@st.cache_data(ttl=3600)
+def get_model_agreement_data() -> dict:
+    prices = download_rotation_prices(period="5y")
+    return build_model_agreement(prices)
+
+
+@st.cache_data(ttl=3600)
+def get_qqq_direction_data() -> dict:
+    prices = download_rotation_prices(period="5y")
+    return build_qqq_direction_agreement(prices)
+
+
+def format_model_agreement_table(models: pd.DataFrame) -> pd.DataFrame:
+    if models.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, row in models.iterrows():
+        available = bool(row.get("available", False))
+        if available:
+            rows.append(
+                {
+                    "Model": row.get("model", "N/A"),
+                    "Read": f"Favors {row.get('favored_side', 'N/A')}",
+                    "Value Prob": f"{row.get('value_probability', np.nan):.1%}",
+                    "AI Prob": f"{row.get('ai_probability', np.nan):.1%}",
+                    "Edge": f"{row.get('edge', np.nan):.1%}",
+                    "Rows": f"{int(row.get('training_rows', 0)):,}",
+                    "Features": f"{int(row.get('feature_count', 0)):,}",
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "Model": row.get("model", "N/A"),
+                    "Read": "Unavailable",
+                    "Value Prob": "N/A",
+                    "AI Prob": "N/A",
+                    "Edge": "N/A",
+                    "Rows": f"{int(row.get('training_rows', 0)):,}" if pd.notna(row.get("training_rows", np.nan)) else "N/A",
+                    "Features": "N/A",
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def format_direction_table(models: pd.DataFrame) -> pd.DataFrame:
+    if models.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, row in models.iterrows():
+        available = bool(row.get("available", False))
+        if available:
+            rows.append(
+                {
+                    "Model": row.get("model", "N/A"),
+                    "Read": f"QQQ {row.get('favored_side', 'N/A')}",
+                    "Up Prob": f"{row.get('up_probability', np.nan):.1%}",
+                    "Down Prob": f"{row.get('down_probability', np.nan):.1%}",
+                    "Edge": f"{row.get('edge', np.nan):.1%}",
+                    "Expected Return": f"{row.get('expected_return', np.nan):.2%}",
+                    "Rows": f"{int(row.get('training_rows', 0)):,}",
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "Model": row.get("model", "N/A"),
+                    "Read": "Unavailable",
+                    "Up Prob": "N/A",
+                    "Down Prob": "N/A",
+                    "Edge": "N/A",
+                    "Expected Return": "N/A",
+                    "Rows": f"{int(row.get('training_rows', 0)):,}" if pd.notna(row.get("training_rows", np.nan)) else "N/A",
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def agreement_meaning(label: str) -> str:
+    if label == "VALUE AGREEMENT":
+        return "continuous models agree that value has the edge."
+    if label == "AI AGREEMENT":
+        return "continuous models agree that AI/growth has the edge."
+    if label == "MIXED":
+        return "continuous models disagree, so confidence should be lower."
+    return "not enough model history is available for an agreement read."
+
+
+def direction_meaning(label: str) -> str:
+    if label == "QQQ UP AGREEMENT":
+        return "continuous direction models agree that QQQ has positive forward-return odds."
+    if label == "QQQ DOWN AGREEMENT":
+        return "continuous direction models agree that QQQ has negative forward-return risk."
+    if label == "MIXED":
+        return "direction models disagree, so QQQ direction confidence should be lower."
+    return "not enough model history is available for a QQQ direction read."
+
+
 def plot_price_chart(df: pd.DataFrame, symbol: str):
     df = df.copy()
     price_col = "adjclose" if "adjclose" in df.columns else "close"
@@ -216,6 +370,169 @@ def plot_price_chart(df: pd.DataFrame, symbol: str):
         xaxis_title="Date",
         yaxis_title="Price",
         height=500,
+    )
+
+    return fig
+
+
+def get_favored_read(value_probability: float | None, ai_probability: float | None, clock: str) -> dict:
+    if value_probability is None or ai_probability is None:
+        return {
+            "side": "Neutral",
+            "title": f"{clock} Neutral",
+            "probability": None,
+            "color": "#777777",
+            "bg_color": "#f2f2f2",
+            "border_color": "#777777",
+        }
+
+    if pd.isna(value_probability) or pd.isna(ai_probability):
+        return {
+            "side": "Neutral",
+            "title": f"{clock} Neutral",
+            "probability": None,
+            "color": "#777777",
+            "bg_color": "#f2f2f2",
+            "border_color": "#777777",
+        }
+
+    if value_probability >= ai_probability:
+        return {
+            "side": "Value",
+            "title": f"{clock} Favors Value",
+            "probability": value_probability,
+            "color": "#1f8f4d",
+            "bg_color": "#e9f7ef",
+            "border_color": "#1f8f4d",
+        }
+
+    return {
+        "side": "AI",
+        "title": f"{clock} Favors AI",
+        "probability": ai_probability,
+        "color": "#1f77b4",
+        "bg_color": "#eef5fb",
+        "border_color": "#1f77b4",
+    }
+
+
+def plot_clock_trend(trend_df: pd.DataFrame):
+    fig = go.Figure()
+
+    value_color = "#1f8f4d"
+    ai_color = "#1f77b4"
+
+    fig.add_trace(
+        go.Scatter(
+            x=[trend_df.index[0]],
+            y=[0],
+            mode="markers",
+            name="Marker: favors Value",
+            visible="legendonly",
+            marker={"size": 10, "color": value_color},
+            hoverinfo="skip",
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[trend_df.index[0]],
+            y=[0],
+            mode="markers",
+            name="Marker: favors AI",
+            visible="legendonly",
+            marker={"size": 10, "color": ai_color},
+            hoverinfo="skip",
+        )
+    )
+
+    if {"20D Favors Value", "20D Favors AI"}.issubset(trend_df.columns):
+        favors_value = trend_df["20D Favors Value"] >= trend_df["20D Favors AI"]
+        favored_probability = trend_df[["20D Favors Value", "20D Favors AI"]].max(axis=1)
+        fig.add_trace(
+            go.Scatter(
+                x=[trend_df.index[0]],
+                y=[favored_probability.iloc[0] * 100],
+                mode="lines+markers",
+                name="20D Clock",
+                visible="legendonly",
+                line={"color": "#111111", "width": 3},
+                marker={"size": 8, "color": "#111111"},
+                hoverinfo="skip",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=trend_df.index,
+                y=favored_probability * 100,
+                mode="lines+markers",
+                name="20D Clock",
+                showlegend=False,
+                line={"color": "#111111", "width": 3},
+                marker={
+                    "size": 8,
+                    "color": [value_color if side else ai_color for side in favors_value],
+                    "line": {"color": "white", "width": 1},
+                },
+                customdata=[
+                    ["Value" if side else "AI"] for side in favors_value
+                ],
+                hovertemplate="%{x|%b %d, %Y}<br>20D favors %{customdata[0]}<br>Probability: %{y:.1f}%<extra></extra>",
+            )
+        )
+
+    if {"60D Favors Value", "60D Favors AI"}.issubset(trend_df.columns):
+        favors_value = trend_df["60D Favors Value"] >= trend_df["60D Favors AI"]
+        favored_probability = trend_df[["60D Favors Value", "60D Favors AI"]].max(axis=1)
+        fig.add_trace(
+            go.Scatter(
+                x=[trend_df.index[0]],
+                y=[favored_probability.iloc[0] * 100],
+                mode="lines+markers",
+                name="60D Clock",
+                visible="legendonly",
+                line={"color": "#777777", "width": 3, "dash": "dash"},
+                marker={"size": 8, "color": "#777777"},
+                hoverinfo="skip",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=trend_df.index,
+                y=favored_probability * 100,
+                mode="lines+markers",
+                name="60D Clock",
+                showlegend=False,
+                line={"color": "#777777", "width": 3, "dash": "dash"},
+                marker={
+                    "size": 8,
+                    "color": [value_color if side else ai_color for side in favors_value],
+                    "line": {"color": "white", "width": 1},
+                },
+                customdata=[
+                    ["Value" if side else "AI"] for side in favors_value
+                ],
+                hovertemplate="%{x|%b %d, %Y}<br>60D favors %{customdata[0]}<br>Probability: %{y:.1f}%<extra></extra>",
+            )
+        )
+
+    fig.add_hline(
+        y=50,
+        line_dash="dash",
+        line_color="#777777",
+        annotation_text="50% line",
+        annotation_position="bottom right",
+    )
+
+    fig.update_layout(
+        title="30D Clock Trend",
+        xaxis_title="As-of Date",
+        yaxis_title="Probability",
+        yaxis={"range": [0, 100], "ticksuffix": "%"},
+        height=420,
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.08, "x": 0},
+        margin={"l": 40, "r": 20, "t": 80, "b": 40},
     )
 
     return fig
@@ -740,27 +1057,22 @@ else:
                         f"{expected_20d:.2%}" if pd.notna(expected_20d) else "N/A",
                     )
 
-                if "HIGH-CONVICTION" in signal_20d:
-                    bg_color_20d = "#e9f7ef"
-                    border_color_20d = "#1f8f4d"
-                    meter_color_20d = "#1f8f4d"
-                elif "WARNING" in signal_20d or "MIXED" in signal_20d:
-                    bg_color_20d = "#fff4e6"
-                    border_color_20d = "#cc7a00"
-                    meter_color_20d = "#cc7a00"
-                else:
-                    bg_color_20d = "#f2f2f2"
-                    border_color_20d = "#777777"
-                    meter_color_20d = "#777777"
+                favored_20d = get_favored_read(
+                    value_probability_20d,
+                    ai_probability_20d,
+                    "20D",
+                )
+                bg_color_20d = favored_20d["bg_color"]
+                border_color_20d = favored_20d["border_color"]
 
                 meaning_20d = get_20d_quality_meaning(signal_20d)
 
                 st.plotly_chart(
                     plot_probability_meter(
-                        value_probability_20d,
-                        "20D Value Rotation Pressure",
-                        "Short-term probability that value beats AI/growth",
-                        meter_color_20d,
+                        favored_20d["probability"],
+                        favored_20d["title"],
+                        "Short-term read",
+                        favored_20d["color"],
                     ),
                     use_container_width=True,
                 )
@@ -837,28 +1149,23 @@ else:
                         f"{expected_60d:.2%}" if pd.notna(expected_60d) else "N/A",
                     )
 
-                if "PERSISTENCE" in signal_60d:
-                    bg_color_60d = "#e9f7ef"
-                    border_color_60d = "#1f8f4d"
-                    meter_color_60d = "#1f8f4d"
-                elif "REASSERTION" in signal_60d or "REVERSAL" in signal_60d:
-                    bg_color_60d = "#fff0f0"
-                    border_color_60d = "#cc3333"
-                    meter_color_60d = "#cc3333"
-                else:
-                    bg_color_60d = "#f2f2f2"
-                    border_color_60d = "#777777"
-                    meter_color_60d = "#777777"
+                favored_60d = get_favored_read(
+                    value_probability_60d,
+                    ai_probability_60d,
+                    "60D",
+                )
+                bg_color_60d = favored_60d["bg_color"]
+                border_color_60d = favored_60d["border_color"]
 
                 meaning_60d = get_60d_signal_meaning(signal_60d)
                 combined_meaning = get_two_clock_meaning(signal, signal_60d)
 
                 st.plotly_chart(
                     plot_probability_meter(
-                        ai_probability_60d,
-                        "60D AI Reassertion Risk",
-                        "Longer-term probability that AI/growth retakes leadership",
-                        meter_color_60d,
+                        favored_60d["probability"],
+                        favored_60d["title"],
+                        "Longer-term read",
+                        favored_60d["color"],
                     ),
                     use_container_width=True,
                 )
@@ -884,6 +1191,139 @@ else:
 
             except Exception as e:
                 st.warning(f"60D predictive model could not load: {e}")
+
+        st.subheader("Predictive Model Agreement")
+
+        if download_rotation_prices is None or build_model_agreement is None:
+            st.warning(f"Continuous model import failed: {CONTINUOUS_MODEL_IMPORT_ERROR}")
+        else:
+            try:
+                agreement = get_model_agreement_data()
+                agreement_20d = agreement.get("agreement_20d", "NO MODEL")
+                agreement_60d = agreement.get("agreement_60d", "NO MODEL")
+                models_20d = agreement.get("models_20d", pd.DataFrame())
+                models_60d = agreement.get("models_60d", pd.DataFrame())
+
+                a1, a2 = st.columns(2)
+
+                with a1:
+                    st.metric("20D Agreement", agreement_20d)
+                    st.caption(agreement_meaning(agreement_20d))
+                    st.dataframe(
+                        format_model_agreement_table(models_20d),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                with a2:
+                    st.metric("60D Agreement", agreement_60d)
+                    st.caption(agreement_meaning(agreement_60d))
+                    st.dataframe(
+                        format_model_agreement_table(models_60d),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                st.caption(
+                    "This layer uses continuous features and logistic models. It is a model-agreement check, "
+                    "not a replacement for the bucket backtest or the two-clock interpretation."
+                )
+
+            except Exception as e:
+                st.warning(f"Predictive model agreement could not load: {e}")
+
+        st.subheader("QQQ Direction Model")
+
+        if download_rotation_prices is None or build_qqq_direction_agreement is None:
+            st.warning(f"QQQ direction model import failed: {CONTINUOUS_MODEL_IMPORT_ERROR}")
+        else:
+            try:
+                direction = get_qqq_direction_data()
+                agreement_5d = direction.get("agreement_5d", "NO MODEL")
+                agreement_20d = direction.get("agreement_20d", "NO MODEL")
+                models_5d = direction.get("models_5d", pd.DataFrame())
+                models_20d = direction.get("models_20d", pd.DataFrame())
+
+                d1, d2 = st.columns(2)
+
+                with d1:
+                    st.metric("QQQ 5D Direction", agreement_5d)
+                    st.caption(direction_meaning(agreement_5d))
+                    st.dataframe(
+                        format_direction_table(models_5d),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                with d2:
+                    st.metric("QQQ 20D Direction", agreement_20d)
+                    st.caption(direction_meaning(agreement_20d))
+                    st.dataframe(
+                        format_direction_table(models_20d),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                st.caption(
+                    "This panel predicts QQQ up/down direction. It is separate from the leadership model, "
+                    "which predicts AI/growth versus value relative performance."
+                )
+
+            except Exception as e:
+                st.warning(f"QQQ direction model could not load: {e}")
+
+        st.subheader("30D Clock Trend")
+
+        if (
+            download_rotation_prices is None
+            or build_20d_model_dataset is None
+            or build_60d_model_dataset is None
+            or predict_recent_20d is None
+            or predict_recent_60d is None
+        ):
+            st.warning("Clock trend model could not load because one or more predictive modules failed to import.")
+        else:
+            try:
+                clock_trend = get_clock_trend_data(lookback_days=30)
+
+                if clock_trend.empty:
+                    st.info("Not enough history to build the 30D clock trend.")
+                else:
+                    st.plotly_chart(plot_clock_trend(clock_trend), use_container_width=True)
+
+                    st.caption(
+                        "Backdated reads use only training outcomes that would have been known as of each date. "
+                        "Green means the clock favors value; blue means the clock favors AI/growth."
+                    )
+
+                    display_trend = clock_trend.reset_index()
+                    display_trend = display_trend.rename(columns={display_trend.columns[0]: "Date"})
+                    display_trend["Date"] = display_trend["Date"].dt.strftime("%Y-%m-%d")
+
+                    percent_cols = [
+                        "20D Favors Value",
+                        "20D Favors AI",
+                        "20D Expected Rel",
+                        "60D Favors Value",
+                        "60D Favors AI",
+                        "60D Expected Rel",
+                    ]
+                    for col in percent_cols:
+                        if col in display_trend.columns:
+                            display_trend[col] = display_trend[col].map(
+                                lambda value: f"{value:.2%}" if pd.notna(value) else "N/A"
+                            )
+
+                    if "rotation_score" in display_trend.columns:
+                        display_trend["rotation_score"] = display_trend["rotation_score"].map(
+                            lambda value: f"{value:.0f}" if pd.notna(value) else "N/A"
+                        )
+                        display_trend = display_trend.rename(columns={"rotation_score": "Score"})
+
+                    st.dataframe(display_trend, use_container_width=True, hide_index=True)
+
+            except Exception as e:
+                st.warning(f"30D clock trend could not load: {e}")
 
         st.subheader("Two-Clock Interpretation")
 
