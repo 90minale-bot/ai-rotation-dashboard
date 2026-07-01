@@ -81,6 +81,22 @@ except Exception as e:
 else:
     CONTINUOUS_MODEL_IMPORT_ERROR = None
 
+try:
+    from value_ai_rotation.rotation_history import (
+        build_clock_snapshot,
+        get_history_path,
+        read_clock_history,
+        upsert_clock_snapshot,
+    )
+except Exception as e:
+    build_clock_snapshot = None
+    get_history_path = None
+    read_clock_history = None
+    upsert_clock_snapshot = None
+    ROTATION_HISTORY_IMPORT_ERROR = e
+else:
+    ROTATION_HISTORY_IMPORT_ERROR = None
+
 
 st.set_page_config(
     page_title="AI vs Value Rotation Analytics",
@@ -202,7 +218,6 @@ def get_20d_prediction_data() -> dict:
     return predict_latest_20d(dataset)
 
 
-@st.cache_data(ttl=3600)
 def get_clock_trend_data(lookback_days: int = 30) -> pd.DataFrame:
     prices = download_rotation_prices(period="5y")
 
@@ -233,6 +248,12 @@ def get_clock_trend_data(lookback_days: int = 30) -> pd.DataFrame:
         combined["60D Expected Rel"] = trend_60d["expected_relative_60d"]
         combined["60D Matched Obs"] = trend_60d["matched_observations"]
 
+    saved_history = get_saved_clock_history()
+    if not saved_history.empty:
+        combined = pd.concat([combined, saved_history], axis=0)
+        combined = combined.sort_index()
+        combined = combined[~combined.index.duplicated(keep="last")]
+
     combined.index = pd.to_datetime(combined.index)
     return combined.sort_index().tail(lookback_days)
 
@@ -247,6 +268,59 @@ def get_model_agreement_data() -> dict:
 def get_qqq_direction_data() -> dict:
     prices = download_rotation_prices(period="5y")
     return build_qqq_direction_agreement(prices)
+
+
+def get_saved_clock_history() -> pd.DataFrame:
+    if read_clock_history is None:
+        return pd.DataFrame()
+
+    history = read_clock_history()
+    if history.empty:
+        return pd.DataFrame()
+
+    trend = history.copy()
+    trend["Date"] = pd.to_datetime(trend["Date"], errors="coerce")
+    trend = trend.dropna(subset=["Date"]).set_index("Date")
+
+    if "Score" in trend.columns:
+        trend["rotation_score"] = trend["Score"]
+        trend = trend.drop(columns=["Score"])
+
+    numeric_cols = [
+        "rotation_score",
+        "20D Favors Value",
+        "20D Favors AI",
+        "20D Expected Rel",
+        "20D Matched Obs",
+        "60D Favors Value",
+        "60D Favors AI",
+        "60D Expected Rel",
+        "60D Matched Obs",
+    ]
+    for col in numeric_cols:
+        if col in trend.columns:
+            trend[col] = pd.to_numeric(trend[col], errors="coerce")
+
+    return trend.sort_index()
+
+
+def save_current_clock_snapshot() -> tuple[pd.DataFrame, Path | None]:
+    if build_clock_snapshot is None or upsert_clock_snapshot is None or get_history_path is None:
+        return pd.DataFrame(), None
+
+    prediction_20d = get_20d_prediction_data()
+    prediction_60d = get_60d_prediction_data()
+    agreement = get_model_agreement_data() if build_model_agreement is not None else {}
+    direction = get_qqq_direction_data() if build_qqq_direction_agreement is not None else {}
+
+    snapshot = build_clock_snapshot(
+        prediction_20d=prediction_20d,
+        prediction_60d=prediction_60d,
+        agreement=agreement,
+        direction=direction,
+    )
+    history = upsert_clock_snapshot(snapshot)
+    return history, get_history_path()
 
 
 def format_model_agreement_table(models: pd.DataFrame) -> pd.DataFrame:
@@ -1284,6 +1358,7 @@ else:
             st.warning("Clock trend model could not load because one or more predictive modules failed to import.")
         else:
             try:
+                saved_history, history_path = save_current_clock_snapshot()
                 clock_trend = get_clock_trend_data(lookback_days=30)
 
                 if clock_trend.empty:
@@ -1291,9 +1366,16 @@ else:
                 else:
                     st.plotly_chart(plot_clock_trend(clock_trend), use_container_width=True)
 
+                    history_note = (
+                        f"Saved daily history rows: {len(saved_history):,}. "
+                        f"History file: {history_path}."
+                        if history_path is not None
+                        else "Daily history storage is not available in this environment."
+                    )
                     st.caption(
-                        "Backdated reads use only training outcomes that would have been known as of each date. "
-                        "Green means the clock favors value; blue means the clock favors AI/growth."
+                        "The chart starts with backdated reads, then keeps a saved daily record as time progresses. "
+                        "Green means the clock favors value; blue means the clock favors AI/growth. "
+                        f"{history_note}"
                     )
 
                     display_trend = clock_trend.reset_index()
