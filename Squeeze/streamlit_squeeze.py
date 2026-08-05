@@ -1,7 +1,16 @@
 import os
 import glob
+import sys
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
+
+# Streamlit Cloud starts the app from the repository root. Add this script's
+# directory so the sibling scanner module resolves consistently in every runtime.
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 from squeeze import (
     DEFAULT_WATCHLIST,
