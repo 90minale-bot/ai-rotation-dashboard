@@ -4,7 +4,7 @@ requests
 scikit-learn
 joblib
 pyyaml
-streamlit
+streamlit==1.56.0
 matplotlib
 plotly
 yahooquery
